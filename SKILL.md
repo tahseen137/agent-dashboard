@@ -121,17 +121,18 @@ export SUPABASE_ANON_KEY="eyJ..."  # Same anon key used by the dashboard
 
 ### 1. Cron Auto-Update (Every 30 Minutes)
 
-Set up a cron job that collects live data and pushes it to your dashboard:
+Set up a cron job that collects data from OpenClaw APIs and pushes it:
 
 ```
 Create a cron job called "Dashboard Update" that runs every 30 minutes.
 It should:
 1. Run `cron list` to get all cron job statuses, error counts, last run times
 2. Run `sessions_list` to find any active sub-agents and their current tasks
-3. Read HEARTBEAT.md for action items requiring human attention
-4. Read today's memory file (memory/YYYY-MM-DD.md) for recent activity
-5. Build the dashboard JSON and push to Supabase (or git push for Tier 2)
+3. Build the dashboard JSON from this API data
+4. Push to Supabase (or git push for Tier 2)
 ```
+
+**Data sources:** Only OpenClaw built-in APIs (`cron list`, `sessions_list`). No local files are read. Action items and recent activity are added manually via the "Manual Update" command below.
 
 **Sample cron configuration:**
 ```yaml
@@ -139,16 +140,14 @@ name: Dashboard Update
 schedule: "*/30 * * * *"  # Every 30 minutes
 model: sonnet             # Fast model for quick updates
 prompt: |
-  Update the Mission Control dashboard with current state:
+  Update the Mission Control dashboard:
   
-  1. Get cron status: Run `cron list` and parse the output
-  2. Get active sessions: Run `sessions_list` to find active sub-agents
-  3. Get action items: Read HEARTBEAT.md for pending items
-  4. Get recent activity: Read today's memory file
-  5. Build JSON matching the dashboard schema
-  6. Push to Supabase: curl -X PATCH $SUPABASE_URL/rest/v1/dashboard_state...
+  1. Run `cron list` to get job names, statuses, error counts, last run times
+  2. Run `sessions_list` to find active sub-agents and their tasks
+  3. Build JSON matching the dashboard schema from API data only
+  4. Push to Supabase or GitHub
   
-  Keep activeNow accurate - only include sessions that are actually running.
+  Do not read local files. Only use cron list and sessions_list data.
 ```
 
 ### 2. Real-Time Event Pushes
@@ -302,9 +301,9 @@ The dashboard expects JSON in this format:
 
 | ✅ Does | ❌ Doesn't |
 |---------|-----------|
-| Render HTML dashboards | Access source code or private files |
+| Render HTML dashboards | Read local files (no HEARTBEAT.md, no memory files, no source code) |
 | Push operational status to YOUR services | Send data to third-party services |
-| Read OpenClaw state (crons, sessions) | Store, log, or transmit credentials |
+| Read OpenClaw APIs only (cron list, sessions_list) | Store, log, or transmit credentials |
 | Use YOUR Supabase/GitHub accounts | Require service_role or admin keys |
 
 ### Exactly What Data Gets Pushed (Tier 2 & 3)
@@ -325,18 +324,16 @@ The dashboard pushes ONLY these fields — nothing else:
 
 **Never pushed:** passwords, API keys, tokens, file contents, database credentials, user data, or PII. The agent builds the JSON from operational status only — task names, timestamps, and status codes.
 
-### What Local Data the Agent Reads
+### What Data the Agent Reads
 
-When the auto-update cron runs, it reads:
+The auto-update cron uses ONLY OpenClaw built-in APIs:
 
 | Source | What it extracts | Sensitive? |
 |--------|-----------------|------------|
 | `cron list` (OpenClaw API) | Job names, status, error counts | ❌ No |
 | `sessions_list` (OpenClaw API) | Active task labels, models | ❌ No |
-| `HEARTBEAT.md` | Action item titles | ⚠️ Review your HEARTBEAT.md — don't put secrets in it |
-| `memory/YYYY-MM-DD.md` | Event descriptions | ⚠️ Review your memory files — don't put secrets in event logs |
 
-**Recommendation:** Keep HEARTBEAT.md and memory files free of credentials. Use them for task descriptions and status only — which is their intended purpose.
+**No local files are read.** The cron does not access HEARTBEAT.md, memory files, source code, or any other files on disk. Action items and recent activity are added manually by the user via the "Manual Update" command.
 
 ### No Service Role Key Required
 
