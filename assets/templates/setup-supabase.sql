@@ -39,7 +39,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE dashboard_state;
 
 -- 6. Insert the initial row (required before first push)
 INSERT INTO dashboard_state (id, data)
-VALUES ('main', '{"actionRequired":[],"activeNow":[],"products":[],"crons":[],"recentActivity":[],"revenue":{"mrr":0}}')
+VALUES ('main', '{"actionRequired":[],"activeNow":[],"products":[],"crons":[],"recentActivity":[]}')
 ON CONFLICT (id) DO NOTHING;
 
 -- Done! Your dashboard_state table is ready.
