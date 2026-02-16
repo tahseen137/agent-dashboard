@@ -1,11 +1,14 @@
 ---
 name: agent-dashboard
 description: >
-  Real-time agent dashboard for OpenClaw. Monitor active tasks, cron job health,
-  issues, and action items from anywhere. Three setup tiers: (1) Zero-config canvas
-  rendering inside OpenClaw, (2) GitHub Pages with 30-second polling — free, 2-minute
-  setup, (3) Supabase Realtime + Vercel for instant websocket updates. All data stays
-  on your machine. PIN-protected. No external services required for Tier 1.
+  Real-time agent dashboard for OpenClaw. Monitor active tasks, cron job health, issues,
+  and action items from anywhere. Three setup tiers: (1) Zero-config canvas rendering
+  inside OpenClaw, (2) GitHub Pages with 30-second polling — free, 2-minute setup,
+  (3) Supabase Realtime + Vercel for instant websocket updates. All data stays on your
+  machine. PIN-protected. No external services required for Tier 1. Tier 3 requires
+  SUPABASE_URL and SUPABASE_ANON_KEY (no service_role key needed). Only operational
+  status data is pushed (task names, cron status, timestamps) — never credentials,
+  API keys, or file contents.
 ---
 
 # Mission Control 🚀
@@ -84,8 +87,9 @@ In your Supabase SQL Editor, run `assets/templates/setup-supabase.sql`.
 
 From Supabase Dashboard → Settings → API:
 - Copy `SUPABASE_URL` (Project URL)
-- Copy `SUPABASE_ANON_KEY` (anon public key — safe for client)
-- Copy `SUPABASE_SERVICE_KEY` (service_role key — keep secret!)
+- Copy `SUPABASE_ANON_KEY` (anon public key)
+
+That's it — no service_role key needed. The anon key handles both reads (dashboard) and writes (push script) via table-specific RLS.
 
 **Step 3: Edit the Dashboard**
 
@@ -106,7 +110,7 @@ vercel deploy --prod
 
 ```bash
 export SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
-export SUPABASE_SERVICE_KEY="eyJ..."  # service_role key, NOT anon
+export SUPABASE_ANON_KEY="eyJ..."  # Same anon key used by the dashboard
 ```
 
 ---
@@ -215,10 +219,9 @@ Green pulsing dot shows websocket is connected. Flash animation when data update
 |----------|----------|------|---------|
 | `DASHBOARD_PIN` | No | All | PIN code for dashboard access (set directly in HTML config) |
 | `SUPABASE_URL` | Yes | Tier 3 only | Your Supabase project URL |
-| `SUPABASE_ANON_KEY` | Yes | Tier 3 only | Supabase anon key — **read-only**, safe for client-side HTML |
-| `SUPABASE_SERVICE_KEY` | Yes | Tier 3 only | Service role key — **server-side push script ONLY** (see security notes below) |
+| `SUPABASE_ANON_KEY` | Yes | Tier 3 only | Supabase anon key — used for both dashboard reads AND push script writes |
 
-**Tier 1 needs zero env vars.** Tier 2 needs only a GitHub repo. Tier 3 needs Supabase credentials.
+**Tier 1 needs zero env vars.** Tier 2 needs only a GitHub repo. Tier 3 needs only `SUPABASE_URL` and `SUPABASE_ANON_KEY` — no service_role key required.
 
 ### Permissions Used by OpenClaw
 
@@ -293,52 +296,73 @@ The dashboard expects JSON in this format:
 
 ## Security & Privacy
 
-**This is an instruction-only skill — no executable code, no install scripts, no third-party dependencies.** The entire security surface is the SKILL.md instructions and OpenClaw's built-in `exec` capability.
+**This is an instruction-only skill — no executable code, no install scripts, no third-party dependencies.**
 
 ### What This Skill Does and Doesn't Do
 
 | ✅ Does | ❌ Doesn't |
 |---------|-----------|
-| Render HTML dashboards | Access local files or source code |
-| Push status data to YOUR services | Send data to third-party services |
-| Read OpenClaw state (crons, sessions) | Store or log credentials |
-| Use YOUR Supabase/GitHub credentials | Require always-on permissions |
+| Render HTML dashboards | Access source code or private files |
+| Push operational status to YOUR services | Send data to third-party services |
+| Read OpenClaw state (crons, sessions) | Store, log, or transmit credentials |
+| Use YOUR Supabase/GitHub accounts | Require service_role or admin keys |
 
-### PIN Protection — Limitations
+### Exactly What Data Gets Pushed (Tier 2 & 3)
 
-The dashboard uses a **client-side PIN** (JavaScript check before showing content). This is convenience access control, NOT cryptographic security.
+The dashboard pushes ONLY these fields — nothing else:
 
-**What it prevents:** Casual visitors from seeing your dashboard
-**What it does NOT prevent:** Someone inspecting the page source or network requests
+| Field | Example | Contains secrets? |
+|-------|---------|-------------------|
+| `actionRequired[].title` | "Review PR #42" | ❌ No |
+| `activeNow[].task` | "Deploying v2.0" | ❌ No |
+| `products[].name` | "My App" | ❌ No |
+| `products[].url` | "https://myapp.com" | ❌ No (public URLs only) |
+| `products[].status` | "live" | ❌ No |
+| `crons[].name` | "Daily Report" | ❌ No |
+| `crons[].status` | "ok" / "error" | ❌ No |
+| `crons[].lastError` | "timeout after 30s" | ❌ No (error messages only) |
+| `recentActivity[].event` | "✅ Deployed v2.1" | ❌ No |
 
-**For stronger protection:**
-- **Tier 2:** Make your GitHub Pages repo **private** (GitHub Pro) — GitHub handles auth
-- **Tier 3:** Use Vercel's **password protection** (Vercel Pro) or restrict Supabase RLS to authenticated users only
-- **All tiers:** Don't put highly sensitive data (passwords, API keys, financial details) in the dashboard — it's designed for operational status only
+**Never pushed:** passwords, API keys, tokens, file contents, database credentials, user data, or PII. The agent builds the JSON from operational status only — task names, timestamps, and status codes.
 
-### Supabase Service Role Key (Tier 3)
+### What Local Data the Agent Reads
 
-The `SUPABASE_SERVICE_KEY` is a privileged key that bypasses Row Level Security. It is used **exclusively** in the server-side push script (`push-dashboard.sh`) running on your OpenClaw machine.
+When the auto-update cron runs, it reads:
 
-**Security rules for service_role key:**
-1. ✅ Store it as a local environment variable on your machine
-2. ✅ Use it only in the push script (runs locally via `curl`)
-3. ❌ NEVER put it in client-side HTML, JavaScript, or any deployed code
-4. ❌ NEVER commit it to git or include it in dashboard files
-5. ❌ The `SUPABASE_ANON_KEY` (read-only) is the ONLY key used in client-side code
+| Source | What it extracts | Sensitive? |
+|--------|-----------------|------------|
+| `cron list` (OpenClaw API) | Job names, status, error counts | ❌ No |
+| `sessions_list` (OpenClaw API) | Active task labels, models | ❌ No |
+| `HEARTBEAT.md` | Action item titles | ⚠️ Review your HEARTBEAT.md — don't put secrets in it |
+| `memory/YYYY-MM-DD.md` | Event descriptions | ⚠️ Review your memory files — don't put secrets in event logs |
+
+**Recommendation:** Keep HEARTBEAT.md and memory files free of credentials. Use them for task descriptions and status only — which is their intended purpose.
+
+### No Service Role Key Required
+
+**This skill does NOT require a Supabase `service_role` key.** The anon key handles both reads and writes via table-specific RLS:
+
+- The `dashboard_state` table allows anon `SELECT` and `UPDATE` (via RLS policy)
+- The anon key can ONLY read/write this single table — it cannot access any other tables
+- Worst case if someone gets your anon key: they can overwrite dashboard status data (not sensitive)
+- The anon key is the same one already embedded in your client-side Supabase app
 
 ### Row Level Security (Tier 3)
 
-The provided SQL (`setup-supabase.sql`) configures strict RLS:
-- **`SELECT` (read):** Allowed for `anon` key — so the dashboard can fetch data
-- **`INSERT/UPDATE/DELETE` (write):** Restricted to `service_role` only — only your push script can modify data
-- No anonymous user can write to or delete your dashboard data
+The provided SQL (`setup-supabase.sql`) configures table-specific RLS:
+- **`SELECT`:** Allowed for anon — dashboard can read status
+- **`UPDATE`:** Allowed for anon on `dashboard_state` table only — push script can update status
+- **Other tables:** Unaffected — the anon key's existing RLS policies on all other tables remain unchanged
+- **No `DELETE`:** Anon cannot delete the dashboard row
 
-### Data Privacy
+### PIN Protection — Limitations
 
-- All data stays on your machine and your own services (GitHub/Supabase/Vercel)
-- The dashboard contains operational status only — no passwords, API keys, or PII
-- No telemetry, no analytics, no external calls beyond your own configured services
+The client-side PIN prevents casual access, NOT determined attackers.
+
+**For stronger protection:**
+- **Tier 2:** Make your GitHub Pages repo **private** (GitHub Pro)
+- **Tier 3:** Use Vercel's **password protection** (Pro plan) or add Supabase Auth
+- **All tiers:** The dashboard only contains operational status — no secrets to steal even if accessed
 
 ---
 
