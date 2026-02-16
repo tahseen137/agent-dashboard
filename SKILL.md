@@ -53,7 +53,6 @@ Free hosting with 30-second auto-refresh. Takes 2 minutes to set up.
 
 3. **Edit `index.html`:**
    - Change `YOUR_PIN_HERE` to your chosen PIN
-   - Update `YOUR_GITHUB_USERNAME` to your GitHub username
 
 4. **Enable GitHub Pages:**
    - Go to repo Settings → Pages
@@ -67,19 +66,6 @@ Free hosting with 30-second auto-refresh. Takes 2 minutes to set up.
 
 Your dashboard is now live at `https://YOUR_USERNAME.github.io/mission-control/`
 
-**How the agent updates it:**
-
-The agent runs this command to push updates:
-```bash
-cd ~/mission-control
-# Update data/dashboard-data.json with new data
-git add data/dashboard-data.json
-git commit -m "Dashboard update"
-git push
-```
-
-The page auto-refreshes every 30 seconds, fetching the latest JSON.
-
 ---
 
 ### Tier 3 — Supabase Realtime + Vercel (Premium) ⚡🔥
@@ -92,34 +78,7 @@ True websocket realtime — updates appear in under 1 second.
 
 **Step 1: Create Supabase Table**
 
-In your Supabase SQL Editor, run `assets/templates/setup-supabase.sql`:
-
-```sql
--- Creates the dashboard_state table with proper RLS
-CREATE TABLE IF NOT EXISTS dashboard_state (
-    id TEXT PRIMARY KEY DEFAULT 'main',
-    data JSONB NOT NULL DEFAULT '{}',
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Enable RLS
-ALTER TABLE dashboard_state ENABLE ROW LEVEL SECURITY;
-
--- Allow public read (for dashboard)
-CREATE POLICY "Public read" ON dashboard_state
-    FOR SELECT USING (true);
-
--- Only service role can write (push script)
-CREATE POLICY "Service role write" ON dashboard_state
-    FOR ALL USING (auth.role() = 'service_role');
-
--- Enable realtime
-ALTER PUBLICATION supabase_realtime ADD TABLE dashboard_state;
-
--- Insert initial row
-INSERT INTO dashboard_state (id, data) VALUES ('main', '{}')
-ON CONFLICT (id) DO NOTHING;
-```
+In your Supabase SQL Editor, run `assets/templates/setup-supabase.sql`.
 
 **Step 2: Get Your Keys**
 
@@ -138,7 +97,6 @@ In `tier3-realtime.html`:
 **Step 4: Deploy to Vercel**
 
 ```bash
-# Create project directory
 mkdir mission-control && cd mission-control
 # Copy tier3-realtime.html as index.html
 vercel deploy --prod
@@ -146,13 +104,78 @@ vercel deploy --prod
 
 **Step 5: Configure Push Script**
 
-Set these environment variables on your OpenClaw machine:
 ```bash
 export SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
 export SUPABASE_SERVICE_KEY="eyJ..."  # service_role key, NOT anon
 ```
 
-The agent uses `assets/push-dashboard.sh` to push updates.
+---
+
+## 🔄 Keeping It Fresh — Auto-Update Mechanism
+
+**The dashboard updates itself automatically.** Here's how:
+
+### 1. Cron Auto-Update (Every 30 Minutes)
+
+Set up a cron job that collects live data and pushes it to your dashboard:
+
+```
+Create a cron job called "Dashboard Update" that runs every 30 minutes.
+It should:
+1. Run `cron list` to get all cron job statuses, error counts, last run times
+2. Run `sessions_list` to find any active sub-agents and their current tasks
+3. Read HEARTBEAT.md for action items requiring human attention
+4. Read today's memory file (memory/YYYY-MM-DD.md) for recent activity
+5. Build the dashboard JSON and push to Supabase (or git push for Tier 2)
+```
+
+**Sample cron configuration:**
+```yaml
+name: Dashboard Update
+schedule: "*/30 * * * *"  # Every 30 minutes
+model: sonnet             # Fast model for quick updates
+prompt: |
+  Update the Mission Control dashboard with current state:
+  
+  1. Get cron status: Run `cron list` and parse the output
+  2. Get active sessions: Run `sessions_list` to find active sub-agents
+  3. Get action items: Read HEARTBEAT.md for pending items
+  4. Get recent activity: Read today's memory file
+  5. Build JSON matching the dashboard schema
+  6. Push to Supabase: curl -X PATCH $SUPABASE_URL/rest/v1/dashboard_state...
+  
+  Keep activeNow accurate - only include sessions that are actually running.
+```
+
+### 2. Real-Time Event Pushes
+
+Beyond the periodic cron, the agent pushes updates **immediately** when significant events happen:
+
+- ✅ Task starts or finishes
+- ❌ Errors or failures
+- 🚀 Deploys complete
+- 📧 Important notifications arrive
+
+This means the dashboard reflects changes within seconds, not just every 30 minutes.
+
+**How to enable:** When you start a major task, tell the agent:
+```
+After this deploy finishes, push an update to Mission Control.
+```
+
+### 3. Force Update Button
+
+Every dashboard tier includes a **🔄 Update** button in the header:
+- **Tier 2:** Re-fetches `dashboard-data.json` immediately
+- **Tier 3:** Re-fetches from Supabase immediately
+- Resets the "Updated X ago" timer
+- Shows loading spinner while fetching
+
+Use this when you want to confirm the latest state without waiting for auto-refresh.
+
+### The Result
+
+The combination of **periodic cron + real-time pushes + manual refresh** keeps your dashboard accurate at all times. You'll always see what your agent is actually doing.
 
 ---
 
@@ -173,9 +196,6 @@ Table showing all scheduled jobs with status, last run time, and error counts. C
 ### 📋 Recent Activity
 Timeline of recent events and accomplishments.
 
-### 💰 Revenue (Optional)
-MRR display with Stripe connection status.
-
 ### 🔴 Live Indicator (Tier 3 only)
 Green pulsing dot shows websocket is connected. Flash animation when data updates.
 
@@ -190,7 +210,6 @@ Green pulsing dot shows websocket is connected. Flash animation when data update
 | `SUPABASE_URL` | Yes | Tier 3 | Supabase project URL |
 | `SUPABASE_ANON_KEY` | Yes | Tier 3 | Supabase anon key (read-only, safe for client-side) |
 | `SUPABASE_SERVICE_KEY` | Yes | Tier 3 | Service role key (server-side push script ONLY — never expose!) |
-| `VERCEL_PROJECT` | No | Tier 3 | Vercel project name for deploy |
 
 ---
 
@@ -211,7 +230,6 @@ The dashboard expects JSON in this format:
 ```json
 {
   "lastUpdated": "2024-01-15T12:00:00Z",
-  "pin": "your-pin-here",
   "actionRequired": [
     {
       "title": "Review PR #42",
@@ -249,14 +267,7 @@ The dashboard expects JSON in this format:
       "time": "2024-01-15T11:30:00Z",
       "event": "✅ Deployed v2.1.0 to production"
     }
-  ],
-  "revenue": {
-    "mrr": 0,
-    "currency": "USD",
-    "provider": "stripe",
-    "stripeStatus": "active",
-    "recentTransactions": []
-  }
+  ]
 }
 ```
 
@@ -265,11 +276,9 @@ The dashboard expects JSON in this format:
 | Field | Type | Description |
 |-------|------|-------------|
 | `lastUpdated` | ISO-8601 | When data was last refreshed |
-| `pin` | string | Dashboard access PIN |
 | `actionRequired[].priority` | `high\|medium\|low` | Urgency level |
 | `products[].status` | `live\|testing\|down` | Product health |
 | `crons[].status` | `ok\|error\|paused` | Job status |
-| `revenue.provider` | `stripe\|none` | Payment provider |
 
 ---
 
@@ -299,7 +308,7 @@ The dashboard expects JSON in this format:
 ## Files Included
 
 ```
-mission-control/
+agent-dashboard/
 ├── SKILL.md                      # This file
 ├── assets/
 │   ├── tier1-canvas.html         # Lightweight canvas version
@@ -315,28 +324,6 @@ mission-control/
 
 ---
 
-## Updating the Dashboard
-
-### Manual Update
-```
-Update my mission control dashboard with:
-- Action required: [your items]
-- Currently working on: [current task]
-```
-
-### Automatic Updates
-Set up a cron job to update every 30 minutes:
-```
-Create a cron that updates my mission control dashboard every 30 minutes
-```
-
-The agent will:
-1. Gather current state from memory and cron status
-2. Format the data as JSON
-3. Push to GitHub (Tier 2) or Supabase (Tier 3)
-
----
-
 ## Troubleshooting
 
 ### Dashboard shows "Disconnected" (Tier 3)
@@ -348,10 +335,16 @@ The agent will:
 - Check GitHub Pages is enabled
 - Verify `data/dashboard-data.json` was pushed
 - Hard refresh the page (Ctrl+Shift+R)
+- Click the Force Update button to confirm data is stale
 
 ### PIN not working
 - PINs are case-sensitive
-- Check you're using the same PIN in both data JSON and HTML config
+- Check you're using the same PIN in HTML config
+
+### Cron status not accurate
+- Ensure your Dashboard Update cron is running (`cron list`)
+- Check for errors in the cron output
+- Manually run the update: "Update my Mission Control dashboard now"
 
 ---
 
